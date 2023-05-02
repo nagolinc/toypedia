@@ -13,4 +13,5 @@ options:
   --height HEIGHT
   --prompt-suffix PROMPT_SUFFIX
 
-  
+
+![Example image from a generated page](samplePage.png)
