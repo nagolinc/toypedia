@@ -82,11 +82,10 @@ make sure to include a [link:link to another article] around each proper noun in
     #first, let's get all the proper nouns
     #we'll assume that any word that is Capital Case and not in the first sentence is a proper noun
     properNouns = []
-    #split on "."s and new lines
-
     article_text_without_titles=re.sub(r'==.*==', '', article_text)
-    sentences = re.split(r'\.|\n', article_text_without_titles)
-    lowercase_words = ["the", "of", "in", "and"]
+    #split on "."s and new lines and "?"s !s
+    sentences = re.split(r'[.?!:\n]', article_text_without_titles)
+    lowercase_words = ["the", "of", "in", "and","for"]
     for sentence in sentences:
         #strip whitespace
         sentence = sentence.strip()
@@ -97,7 +96,8 @@ make sure to include a [link:link to another article] around each proper noun in
         sentence = sentence[0].lower() + sentence[1:]
         #regex that matches a set of words that are capital case such as 'Bob Smith' in 'hello Bob Smith'
         #properNounRegex = r'(?<!\w)[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*(?!\w)'
-        properNounRegex = r'(?<!\w)(?:[A-Z][a-z]+(?:\s+(?:' + '|'.join(lowercase_words) + r'))*\s+)*[A-Z][a-z]+(?!\w)'
+        #properNounRegex = r'(?<!\w)(?:[A-Z][a-z]+(?:\s+(?:' + '|'.join(lowercase_words) + r'))*\s+)*[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*(?!\w)'
+        properNounRegex = r'(?<!\w)(?:[A-Z][a-z]*\b(?:\s+(?:' + '|'.join(lowercase_words) + r'))*\s+)*[A-Z][a-z]*\b(?:\s+[A-Z][a-z]*)*(?!\w)'
         matches = re.finditer(properNounRegex, sentence)
         for match in matches:
             properNoun=match.group(0)
