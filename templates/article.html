@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<!--style.css-->
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ title }}</title>
+    <script>
+        function getSelectedText() {
+            let text = '';
+            if (window.getSelection) {
+                text = window.getSelection().toString();
+            } else if (document.selection && document.selection.type !== 'Control') {
+                text = document.selection.createRange().text;
+            }
+            return text;
+        }
+
+        async function updateArticleContent() {
+            const contentElement = document.querySelector('#myContent');
+            let updatedContent = contentElement.innerHTML;
+
+            //replace <br> with newlines
+            updatedContent=updatedContent.replace(/<br>/g, '\n');
+
+            const response = await fetch('{{ url_for("update_article", title=title) }}', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ content: updatedContent })
+            });
+            return response.ok;
+        }
+
+        async function createHyperlink(event) {
+            const selectedText = getSelectedText();
+            if (selectedText) {
+                const url = '{{ url_for("article", title="") }}' + encodeURIComponent(selectedText);
+                const range = window.getSelection().getRangeAt(0);
+                const linkNode = document.createElement('a');
+                linkNode.innerHTML = selectedText;
+                linkNode.setAttribute('href', url);
+                range.deleteContents();
+                range.insertNode(linkNode);
+
+                if (!(await updateArticleContent())) {
+                    alert('Failed to update the article content in the database.');
+                }
+                //reload the page
+                window.location.reload();
+            }
+        }
+
+        //document.addEventListener('mouseup', createHyperlink);
+
+
+        let editMode = false;
+
+        async function toggleEditMode() {
+            const contentElement = document.querySelector('#myContent');
+            const editButton = document.getElementById('editButton');
+
+            editMode = !editMode;
+            contentElement.contentEditable = editMode;
+            editButton.textContent = editMode ? 'Save' : 'Edit';
+
+            if (editMode) {
+                // Fetch the original content from the server
+                const response = await fetch('{{ url_for("get_article_content", title=title) }}');
+                const data = await response.json();
+
+                let textContent=data.content;
+
+                //replace newlines with <br> tags
+                textContent=textContent.replace(/\n/g, '<br>');
+
+                contentElement.innerHTML = textContent;
+            } else {
+                if (!(await updateArticleContent())) {
+                    alert('Failed to update the article content in the database.');
+                }
+            }
+        }
+
+    </script>
+</head>
+
+<body>
+    <h1>{{ title }}</h1>
+    <div id="myContent">{{ content|safe }}</div>
+
+    <br><br>
+    <button id="editButton" onclick="toggleEditMode()">Edit</button>
+
+    <a href="{{ url_for('index') }}">Back to Home</a>
+
+    <br><br>
+
+</body>
+
+</html>
