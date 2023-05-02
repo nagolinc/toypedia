@@ -12,6 +12,49 @@ from exampleArticles import exampleArticles
 import torch
 import argparse
 
+
+import chromadb
+from chromadb.utils import embedding_functions
+from chromadb.config import Settings
+
+import signal
+import sys
+
+
+#will this make chroma save?
+def sigint_handler(signal, frame):
+    global chroma_client, collection
+    print("CTRL+C detected. Saving database and exiting...")
+    chroma_client.persist()
+    
+    del collection
+    del chroma_client
+    
+    print('about to die,but that was fun')
+    sys.exit(0)
+
+# Register the signal handler for SIGINT (CTRL+C)
+signal.signal(signal.SIGINT, sigint_handler)
+
+#read openai key from system environment variable
+open_ai_key = os.environ["OPENAI_API_KEY"]
+openai_ef = embedding_functions.OpenAIEmbeddingFunction(
+                api_key=open_ai_key,
+                model_name="text-embedding-ada-002"
+            )
+
+ABS_PATH = os.path.dirname(os.path.abspath(__file__))
+DB_DIR = os.path.join(ABS_PATH, "chromadb")
+
+chroma_client = chromadb.Client(Settings(chroma_db_impl="duckdb+parquet",
+                                         persist_directory=DB_DIR,
+                                         anonymized_telemetry=False))
+chroma_client.persist()
+collection = chroma_client.get_or_create_collection(name="toypedia",embedding_function=openai_ef)
+#collection.create_index()
+thisCount=collection.count()
+print("Found this many articles in the database:",thisCount)
+
 # Set up OpenAI API key
 openai.api_key = os.environ["OPENAI_API_KEY"]
 
@@ -38,9 +81,6 @@ def generate_anchor_tag(match):
     link_title = match.group(1).strip()
     link_url = url_for('article', title=link_title)
     return f'<a href="{link_url}">{link_title}</a>'
-
-
-
 
 def generate_article(title, n=1):
 
@@ -138,6 +178,17 @@ def index():
         if not table.find_one(title=title):
             content = generate_article(title)
             table.insert({"title": title, "content": content})
+            #get id of article
+            print("about to die",table.find_one(title=title))
+            article_id=table.find_one(title=title)["id"]
+            #add to chroma as well
+            collection.add(
+                documents=[content],
+                metadatas=[{"title": title}],
+                ids=[str(article_id)]
+            )
+            chroma_client.persist()
+
         return redirect(url_for("article", title=title))
     
     #get most recent articles
@@ -159,6 +210,14 @@ def article(title):
         content = generate_article(title)
         table.insert({"title": title, "content": content})
         article = table.find_one(title=title)
+        article_id=table.find_one(title=title)["id"]
+        #add to chroma as well
+        collection.add(
+            documents=[content],
+            metadatas=[{"title": title}],
+            ids=[str(article_id)]
+        )
+        chroma_client.persist()
 
     content = article["content"]
 
@@ -187,7 +246,26 @@ def article(title):
     link_pattern = r'\[link:(.+?)\]'
     content_with_links_and_images = re.sub(link_pattern, generate_anchor_tag, content_with_links_and_images)
 
-    return render_template("article.html", title=article["title"], content=content_with_links_and_images)
+    #get related articles with chroma
+
+    results = collection.query(
+        query_texts=[article["content"]],
+        n_results=min(3,collection.count())
+    )
+
+    related_links=""
+    print(results)
+    for id in results["ids"][0]:
+        print("About to die",id)
+        related_article=table.find_one(id=id)
+        related_title=related_article["title"]
+        #create link to article
+        link=url_for("article", title=related_title)
+        #add to html
+        related_links+=f'<a href="{link}">{related_title}</a><br>'
+
+
+    return render_template("article.html", title=article["title"], content=content_with_links_and_images,related=related_links)
 
 
 @app.route("/update-article/<title>", methods=["POST"])
