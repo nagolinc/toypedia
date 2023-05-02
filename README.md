@@ -14,4 +14,5 @@ options:
   --prompt-suffix PROMPT_SUFFIX
 
 
+Sample Generated Page:
 ![Example image from a generated page](samplePage.png)
