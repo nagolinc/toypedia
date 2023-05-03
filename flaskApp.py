@@ -89,23 +89,27 @@ def generate_anchor_tag(match, source_title=None):
 
 def generate_article(title, n=1,n_related=3,source=None):
     print("getting related articles")
-    related_articles = collection.query(
-        query_texts=[title],
-        n_results=min(n_related,collection.count())
-    )
     related_article_messages=[]
     related_article_titles=[]
-    #go in reverse order so that the most related article is first
-    for id in related_articles["ids"][0][::-1]:
-        related_article=table.find_one(id=id)
-        related_title=related_article["title"]
-        #skip if it's the same as the source
-        if related_title==source:
-            continue
-        related_content=related_article["content"]
-        related_article_messages+=[{"role": "user", "content": f"write an article about {related_title}"},
-                                   {"role":"assistant","content":related_content}]
-        related_article_titles+=[related_title]
+
+    if collection.count()>0:
+        print("what?",collection.count())
+        related_articles = collection.query(
+            query_texts=[title],
+            n_results=min(n_related,collection.count())
+        )
+        
+        #go in reverse order so that the most related article is first
+        for id in related_articles["ids"][0][::-1]:
+            related_article=table.find_one(id=id)
+            related_title=related_article["title"]
+            #skip if it's the same as the source
+            if related_title==source:
+                continue
+            related_content=related_article["content"]
+            related_article_messages+=[{"role": "user", "content": f"write an article about {related_title}"},
+                                    {"role":"assistant","content":related_content}]
+            related_article_titles+=[related_title]
     #add source if it exists
     if source:
         source_article=table.find_one(title=source)
@@ -221,10 +225,11 @@ def index():
             #if so, redirect to that article
             # Your search title
             # Case-insensitive search using the query function
-            result = list(db.query("SELECT * FROM articles WHERE LOWER(title) = LOWER(:search_title)", search_title=title))
-            if len(result)>0:
-                alt_article=result[0]['title']
-                return redirect(url_for("article", title=alt_article))
+            if table.count()>0:
+                result = list(db.query("SELECT * FROM articles WHERE LOWER(title) = LOWER(:search_title)", search_title=title))
+                if len(result)>0:
+                    alt_article=result[0]['title']
+                    return redirect(url_for("article", title=alt_article))
             
             content = generate_article(title,n_related=args.related_articles)
             table.insert({"title": title, "content": content})
@@ -264,10 +269,11 @@ def article(title):
     if not article:
 
         # Case-insensitive search using the query function
-        result = list(db.query("SELECT * FROM articles WHERE LOWER(title) = LOWER(:search_title)", search_title=title))
-        if len(result)>0:
-            alt_article=result[0]['title']
-            return redirect(url_for("article", title=alt_article))
+        if table.count()>0:
+            result = list(db.query("SELECT * FROM articles WHERE LOWER(title) = LOWER(:search_title)", search_title=title))
+            if len(result)>0:
+                alt_article=result[0]['title']
+                return redirect(url_for("article", title=alt_article))
 
 
         content = generate_article(title,source=source_title,n_related=args.related_articles)
@@ -311,23 +317,27 @@ def article(title):
     content_with_links_and_images = re.sub(link_pattern, generate_anchor_tag_with_source, content_with_links_and_images)
 
     #get related articles with chroma
-    results = collection.query(
-        query_texts=[article["content"]],
-        n_results=min(args.related_articles,collection.count())
-    )
+    if collection.count()>0:
+        results = collection.query(
+            query_texts=[article["content"]],
+            n_results=min(args.related_articles,collection.count())
+        )
 
-    related_links=""
-    print(results['metadatas'])
-    for id in results["ids"][0]:
-        related_article=table.find_one(id=id)
-        related_title=related_article["title"]
-        #skip if it's the same article
-        if related_title==title:
-            continue
-        #create link to article
-        link=url_for("article", title=related_title)
-        #add to html
-        related_links+=f'<a href="{link}">{related_title}</a><br>'
+
+        related_links=""
+        print(results['metadatas'])
+        for id in results["ids"][0]:
+            related_article=table.find_one(id=id)
+            related_title=related_article["title"]
+            #skip if it's the same article
+            if related_title==title:
+                continue
+            #create link to article
+            link=url_for("article", title=related_title)
+            #add to html
+            related_links+=f'<a href="{link}">{related_title}</a><br>'
+    else:
+        related_links=""
 
 
     return render_template("article.html", title=article["title"], content=content_with_links_and_images,related=related_links)
