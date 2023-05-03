@@ -104,17 +104,17 @@ def generate_article(title, n=1,n_related=3,source=None):
             related_article=table.find_one(id=id)
             related_title=related_article["title"]
             #skip if it's the same as the source
-            if related_title==source:
+            if related_title==source or related_title==title:
                 continue
             related_content=related_article["content"]
-            related_article_messages+=[{"role": "user", "content": f"write an article about {related_title}"},
+            related_article_messages+=[{"role": "user", "content": f"write a fictional article about {related_title}"},
                                     {"role":"assistant","content":related_content}]
             related_article_titles+=[related_title]
     #add source if it exists
     if source:
         source_article=table.find_one(title=source)
         source_content=source_article["content"]
-        related_article_messages+=[{"role": "user", "content": f"write an article about {source_article}"},
+        related_article_messages+=[{"role": "user", "content": f"write a fictional article about {source_article}"},
                                    {"role":"assistant","content":source_content}]
         related_article_titles+=[source]
 
@@ -137,6 +137,7 @@ make sure to include multiple images, links and sections in each article!
 
 make sure to include a [link:link to another article] around each proper noun in the article!
 
+Remember to be creative, since these are fictional articles, you can make up anything you want!
         
     """
 
@@ -145,7 +146,7 @@ make sure to include a [link:link to another article] around each proper noun in
         messages+=related_article_messages
     else:
         messages+=exampleArticles
-    messages+=[{"role": "user", "content": f"Write an article about {title}"}]
+    messages+=[{"role": "user", "content": f"Write a fictional article about {title}"}]
     response = openai.ChatCompletion.create(
         model="gpt-3.5-turbo",
         messages=messages,
@@ -183,31 +184,38 @@ make sure to include a [link:link to another article] around each proper noun in
             properNouns.append(properNoun)
             #print("What happened?",sentence,properNoun)
 
+
+    #replace === with ==
+    article_text = re.sub(r'===', '==', article_text)
+
+
+    def is_inside_brackets_or_equals(match, text):
+        start = match.start()
+        
+        open_bracket_index = text.rfind('[', 0, start)
+        close_bracket_index = text.rfind(']', 0, start)
+        
+        count_equals_before = text[:start].count('==')
+        
+        inside_brackets = open_bracket_index != -1 and (close_bracket_index == -1 or close_bracket_index < open_bracket_index)
+        inside_equals = count_equals_before % 2 == 1
+        
+        return inside_brackets or inside_equals
+
     #remove duplicates
     properNouns = list(set(properNouns))
     #now let's add links around first instance of each proper noun (should only do one substitution per proper noun)
     for properNoun in properNouns:
-        #find first instance of proper noun
-        firstIndex = article_text.find(properNoun)
-        #make sure it isn't already a link (must not be inside of brackets)
-        #find the first [ before firstIndex
-        firstOpenBracketIndex = article_text.rfind("[", 0, firstIndex)
-        if firstOpenBracketIndex==-1:
-            #we're good to go
-            pass
-        else:
-            #find the first ] after firstOpenBracketIndex
-            firstCloseBracketIndex = article_text.find("]", firstOpenBracketIndex)
-            if firstCloseBracketIndex==-1:
-                #we're good to go
-                pass
-            else:
-                #if if firstclosebracketindex is after firstindex, then we skip this proper noun
-                if firstCloseBracketIndex>firstIndex:
-                    continue
-
-        article_text = article_text.replace(properNoun, f'[link:{properNoun}]',1)
-
+        pattern = re.compile(re.escape(properNoun))
+        # Find all matches for the proper noun
+        matches = list(pattern.finditer(article_text))
+        # Filter out matches inside []'s or =='s
+        valid_matches = [match for match in matches if not is_inside_brackets_or_equals(match, article_text)]
+        print(properNoun,matches,valid_matches)
+        if valid_matches:
+            # Use the first valid match to do the substitution
+            start, end = valid_matches[0].span()
+            article_text = article_text[:start] + f'[link:{properNoun}]' + article_text[end:]
 
     #make sure there's at least one image, if not, add one to the top
     if not re.search(r'\[image:.*\]', article_text):
@@ -356,6 +364,25 @@ def update_article(title):
 
     table.update({"id": article["id"], "title": title, "content": updated_content}, ["id"])
     return jsonify({"success": True})
+
+
+
+@app.route("/regenerate-article/<title>")
+def regenerate_article(title):
+    content = generate_article(title,n_related=args.related_articles)
+    table.update({"title": title, "content": content},["title"])
+    article = table.find_one(title=title)
+    article_id=table.find_one(title=title)["id"]
+    #add to chroma as well
+    collection.update(
+        documents=[content],
+        metadatas=[{"title": title}],
+        ids=[str(article_id)]
+    )
+    chroma_client.persist()
+    return jsonify({"success": True,"content": content})
+
+
 
 @app.route("/get-article-content/<title>")
 def get_article_content(title):
