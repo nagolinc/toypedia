@@ -216,6 +216,16 @@ def index():
     if request.method == "POST":
         title = request.form["title"]
         if not table.find_one(title=title):
+
+            #check if title exists in database, but in a different case
+            #if so, redirect to that article
+            # Your search title
+            # Case-insensitive search using the query function
+            result = list(db.query("SELECT * FROM articles WHERE LOWER(title) = LOWER(:search_title)", search_title=title))
+            if len(result)>0:
+                alt_article=result[0]['title']
+                return redirect(url_for("article", title=alt_article))
+            
             content = generate_article(title,n_related=args.related_articles)
             table.insert({"title": title, "content": content})
             #get id of article
@@ -252,6 +262,14 @@ def article(title):
     print("source_title",source_title)
 
     if not article:
+
+        # Case-insensitive search using the query function
+        result = list(db.query("SELECT * FROM articles WHERE LOWER(title) = LOWER(:search_title)", search_title=title))
+        if len(result)>0:
+            alt_article=result[0]['title']
+            return redirect(url_for("article", title=alt_article))
+
+
         content = generate_article(title,source=source_title,n_related=args.related_articles)
         table.insert({"title": title, "content": content})
         article = table.find_one(title=title)
