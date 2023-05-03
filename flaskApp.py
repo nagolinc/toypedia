@@ -20,17 +20,15 @@ from chromadb.config import Settings
 import signal
 import sys
 
+from urllib.parse import quote
 
 #will this make chroma save?
 def sigint_handler(signal, frame):
     global chroma_client, collection
     print("CTRL+C detected. Saving database and exiting...")
     chroma_client.persist()
-    
     del collection
     del chroma_client
-    
-    print('about to die,but that was fun')
     sys.exit(0)
 
 # Register the signal handler for SIGINT (CTRL+C)
@@ -77,16 +75,50 @@ def generate_and_save_image(prompt,width=512,height=512):
     image_path = generate_image_filename(prompt)
     image.save(image_path, 'PNG', quality=90)
 
-def generate_anchor_tag(match):
+def generate_anchor_tag(match, source_title=None):
     link_title = match.group(1).strip()
     link_url = url_for('article', title=link_title)
-    return f'<a href="{link_url}">{link_title}</a>'
+    if source_title:
+        encoded_source_title = quote(source_title)
+        link_url += f'?source_title={encoded_source_title}'
+    output = f'<a href="{link_url}">{link_title}</a>'
 
-def generate_article(title, n=1):
+    print("what",link_title,source_title,output)
+
+    return output
+
+def generate_article(title, n=1,n_related=3,source=None):
+    print("getting related articles")
+    related_articles = collection.query(
+        query_texts=[title],
+        n_results=min(n_related,collection.count())
+    )
+    related_article_messages=[]
+    related_article_titles=[]
+    #go in reverse order so that the most related article is first
+    for id in related_articles["ids"][0][::-1]:
+        related_article=table.find_one(id=id)
+        related_title=related_article["title"]
+        #skip if it's the same as the source
+        if related_title==source:
+            continue
+        related_content=related_article["content"]
+        related_article_messages+=[{"role": "user", "content": f"write an article about {related_title}"},
+                                   {"role":"assistant","content":related_content}]
+        related_article_titles+=[related_title]
+    #add source if it exists
+    if source:
+        source_article=table.find_one(title=source)
+        source_content=source_article["content"]
+        related_article_messages+=[{"role": "user", "content": f"write an article about {source_article}"},
+                                   {"role":"assistant","content":source_content}]
+        related_article_titles+=[source]
+
+    print("got related articles",related_article_titles)
 
     print("Generating article for", title)
 
-    systemPrompt="""You are a Wikipedia article generator.
+    systemPrompt="""You are a fictional Wikipedia article generator.
 
 You are generating articles about a fictional world. These articles should include frequent nonsensical details
 such as pigs that fly and people who can teleport.
@@ -105,7 +137,10 @@ make sure to include a [link:link to another article] around each proper noun in
     """
 
     messages = [{"role": "system", "content": systemPrompt}]
-    messages+=exampleArticles
+    if len(related_article_messages)>0:
+        messages+=related_article_messages
+    else:
+        messages+=exampleArticles
     messages+=[{"role": "user", "content": f"Write an article about {title}"}]
     response = openai.ChatCompletion.create(
         model="gpt-3.5-turbo",
@@ -169,6 +204,11 @@ make sure to include a [link:link to another article] around each proper noun in
 
         article_text = article_text.replace(properNoun, f'[link:{properNoun}]',1)
 
+
+    #make sure there's at least one image, if not, add one to the top
+    if not re.search(r'\[image:.*\]', article_text):
+        article_text = f'[image:{title}]\n\n' + article_text
+
     return article_text
 
 @app.route("/", methods=["GET", "POST"])
@@ -176,10 +216,9 @@ def index():
     if request.method == "POST":
         title = request.form["title"]
         if not table.find_one(title=title):
-            content = generate_article(title)
+            content = generate_article(title,n_related=args.related_articles)
             table.insert({"title": title, "content": content})
             #get id of article
-            print("about to die",table.find_one(title=title))
             article_id=table.find_one(title=title)["id"]
             #add to chroma as well
             collection.add(
@@ -206,8 +245,14 @@ def index():
 @app.route("/article/<title>")
 def article(title):
     article = table.find_one(title=title)
+
+    #get source_title from url parameters
+    source_title = request.args.get('source_title')
+
+    print("source_title",source_title)
+
     if not article:
-        content = generate_article(title)
+        content = generate_article(title,source=source_title,n_related=args.related_articles)
         table.insert({"title": title, "content": content})
         article = table.find_one(title=title)
         article_id=table.find_one(title=title)["id"]
@@ -229,7 +274,7 @@ def article(title):
 
     # Handle image tags
     image_pattern = r'\[image:(.+?)\]'
-    matches = re.finditer(image_pattern, content)
+    matches = re.finditer(image_pattern, content,flags=re.IGNORECASE)
     content_with_links_and_images = content
 
     for match in matches:
@@ -244,21 +289,23 @@ def article(title):
 
     # Handle link tags
     link_pattern = r'\[link:(.+?)\]'
-    content_with_links_and_images = re.sub(link_pattern, generate_anchor_tag, content_with_links_and_images)
+    generate_anchor_tag_with_source = lambda match: generate_anchor_tag(match,source_title=title)
+    content_with_links_and_images = re.sub(link_pattern, generate_anchor_tag_with_source, content_with_links_and_images)
 
     #get related articles with chroma
-
     results = collection.query(
         query_texts=[article["content"]],
-        n_results=min(3,collection.count())
+        n_results=min(args.related_articles,collection.count())
     )
 
     related_links=""
-    print(results)
+    print(results['metadatas'])
     for id in results["ids"][0]:
-        print("About to die",id)
         related_article=table.find_one(id=id)
         related_title=related_article["title"]
+        #skip if it's the same article
+        if related_title==title:
+            continue
         #create link to article
         link=url_for("article", title=related_title)
         #add to html
@@ -298,6 +345,10 @@ if __name__ == "__main__":
     parser.add_argument('--height', type=int, default=512)
     #prompt suffix
     parser.add_argument('--prompt-suffix', type=str, default=", masterpiece, best quality")
+    #number of related articles to fetch
+    parser.add_argument('--related-articles', type=int, default=5)
+    
+    
     args = parser.parse_args()
 
     print(args)
